@@ -257,6 +257,15 @@ export class Explore extends React.Component<any, IExploreState> {
     }
   };
 
+  onClickClear = () => {
+    this.setState({
+      graphResult: null,
+      logsResult: null,
+      queries: ensureQueries(),
+      tableResult: null,
+    });
+  };
+
   onClickTableCell = (columnKey: string, rowValue: string) => {
     const { datasource, queries } = this.state;
     if (datasource && datasource.modifyQuery) {
@@ -405,12 +414,12 @@ export class Explore extends React.Component<any, IExploreState> {
               </a>
             </div>
           ) : (
-              <div className="navbar-buttons explore-first-button">
-                <button className="btn navbar-button" onClick={this.handleClickCloseSplit}>
-                  Close Split
+            <div className="navbar-buttons explore-first-button">
+              <button className="btn navbar-button" onClick={this.handleClickCloseSplit}>
+                Close Split
               </button>
-              </div>
-            )}
+            </div>
+          )}
           {!datasourceMissing ? (
             <div className="navbar-buttons">
               <Select
@@ -431,24 +440,12 @@ export class Explore extends React.Component<any, IExploreState> {
               </button>
             </div>
           ) : null}
-          <div className="navbar-buttons">
-            {supportsGraph ? (
-              <button className={`btn navbar-button ${graphButtonActive}`} onClick={this.handleClickGraphButton}>
-                Graph
-              </button>
-            ) : null}
-            {supportsTable ? (
-              <button className={`btn navbar-button ${tableButtonActive}`} onClick={this.handleClickTableButton}>
-                Table
-              </button>
-            ) : null}
-            {supportsLogs ? (
-              <button className={`btn navbar-button ${logsButtonActive}`} onClick={this.handleClickLogsButton}>
-                Logs
-              </button>
-            ) : null}
-          </div>
           <TimePicker range={range} onChangeTime={this.handleChangeTime} />
+          <div className="navbar-buttons">
+            <button className="btn navbar-button navbar-button--no-icon" onClick={this.onClickClear}>
+              Clear All
+            </button>
+          </div>
           <div className="navbar-buttons relative">
             <button className="btn navbar-button--primary" onClick={this.handleSubmit}>
               Run Query <i className="fa fa-level-down run-icon" />
@@ -477,7 +474,27 @@ export class Explore extends React.Component<any, IExploreState> {
               onExecuteQuery={this.handleSubmit}
               onRemoveQueryRow={this.handleRemoveQueryRow}
             />
+
             {queryError ? <div className="text-warning m-a-2">{queryError}</div> : null}
+
+            <div className="result-options">
+              {supportsGraph ? (
+                <button className={`btn navbar-button ${graphButtonActive}`} onClick={this.handleClickGraphButton}>
+                  Graph
+                </button>
+              ) : null}
+              {supportsTable ? (
+                <button className={`btn navbar-button ${tableButtonActive}`} onClick={this.handleClickTableButton}>
+                  Table
+                </button>
+              ) : null}
+              {supportsLogs ? (
+                <button className={`btn navbar-button ${logsButtonActive}`} onClick={this.handleClickLogsButton}>
+                  Logs
+                </button>
+              ) : null}
+            </div>
+
             <main className="m-t-2">
               {supportsGraph && showingGraph ? (
                 <Graph
@@ -488,7 +505,9 @@ export class Explore extends React.Component<any, IExploreState> {
                   split={split}
                 />
               ) : null}
-              {supportsTable && showingTable ? <Table data={tableResult} onClickCell={this.onClickTableCell} className="m-t-3" /> : null}
+              {supportsTable && showingTable ? (
+                <Table data={tableResult} onClickCell={this.onClickTableCell} className="m-t-3" />
+              ) : null}
               {supportsLogs && showingLogs ? <Logs data={logsResult} /> : null}
             </main>
           </div>
