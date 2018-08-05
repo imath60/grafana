@@ -1,5 +1,6 @@
 import _ from 'lodash';
 import React from 'react';
+import Cascader from 'rc-cascader';
 
 // dom also includes Element polyfills
 import { getNextCharacter, getPreviousCousin } from './utils/dom';
@@ -17,6 +18,7 @@ import TypeaheadField, {
 } from './QueryField';
 
 const EMPTY_METRIC = '';
+const HISTOGRAM_SELECTOR = '{le!=""}'; // Returns all timeseries for histograms
 const METRIC_MARK = 'metric';
 const PRISM_LANGUAGE = 'promql';
 
@@ -57,17 +59,19 @@ export function willApplySuggestion(
 }
 
 interface PromQueryFieldProps {
+  histogramMetrics?: string[];
   initialQuery?: string | null;
   labelKeys?: { [index: string]: string[] }; // metric -> [labelKey,...]
   labelValues?: { [index: string]: { [index: string]: string[] } }; // metric -> labelKey -> [labelValue,...]
   metrics?: string[];
   onPressEnter?: () => void;
-  onQueryChange?: (value: string) => void;
+  onQueryChange?: (value: string, override?: boolean) => void;
   portalPrefix?: string;
   request?: (url: string) => any;
 }
 
 interface PromQueryFieldState {
+  histogramMetrics: string[];
   labelKeys: { [index: string]: string[] }; // metric -> [labelKey,...]
   labelValues: { [index: string]: { [index: string]: string[] } }; // metric -> labelKey -> [labelValue,...]
   metrics: string[];
@@ -93,6 +97,7 @@ class PromQueryField extends React.Component<PromQueryFieldProps, PromQueryField
     ];
 
     this.state = {
+      histogramMetrics: props.histogramMetrics || [],
       labelKeys: props.labelKeys || {},
       labelValues: props.labelValues || {},
       metrics: props.metrics || [],
@@ -101,13 +106,20 @@ class PromQueryField extends React.Component<PromQueryFieldProps, PromQueryField
 
   componentDidMount() {
     this.fetchMetricNames();
+    this.fetchHistogramMetrics();
   }
 
-  onChangeQuery = value => {
+  onChangeHistogram = selection => {
+    const metric = selection[0];
+    const query = `histogram_quantile(0.95, sum(rate(${metric}[5m])) by (le))`;
+    this.onChangeQuery(query, true);
+  };
+
+  onChangeQuery = (value: string, override?: boolean) => {
     // Send text change to parent
     const { onQueryChange } = this.props;
     if (onQueryChange) {
-      onQueryChange(value);
+      onQueryChange(value, override);
     }
   };
 
@@ -271,6 +283,16 @@ class PromQueryField extends React.Component<PromQueryFieldProps, PromQueryField
     return fetch(url);
   };
 
+  fetchHistogramMetrics() {
+    this.fetchMetricLabels(HISTOGRAM_SELECTOR, true, () => {
+      const histogramSeries = this.state.labelValues[HISTOGRAM_SELECTOR];
+      if (histogramSeries && histogramSeries['__name__']) {
+        const histogramMetrics = histogramSeries['__name__'].slice().sort();
+        this.setState({ histogramMetrics });
+      }
+    });
+  }
+
   async fetchLabelValues(key) {
     const url = `/api/v1/label/${key}/values`;
     try {
@@ -291,12 +313,12 @@ class PromQueryField extends React.Component<PromQueryFieldProps, PromQueryField
     }
   }
 
-  async fetchMetricLabels(name) {
+  async fetchMetricLabels(name, withName?, callback?) {
     const url = `/api/v1/series?match[]=${name}`;
     try {
       const res = await this.request(url);
       const body = await (res.data || res.json());
-      const { keys, values } = processLabels(body.data);
+      const { keys, values } = processLabels(body.data, withName);
       const labelKeys = {
         ...this.state.labelKeys,
         [name]: keys,
@@ -305,7 +327,7 @@ class PromQueryField extends React.Component<PromQueryFieldProps, PromQueryField
         ...this.state.labelValues,
         [name]: values,
       };
-      this.setState({ labelKeys, labelValues });
+      this.setState({ labelKeys, labelValues }, callback);
     } catch (e) {
       console.error(e);
     }
@@ -323,16 +345,28 @@ class PromQueryField extends React.Component<PromQueryFieldProps, PromQueryField
   }
 
   render() {
+    const { histogramMetrics } = this.state;
+    const histogramOptions = histogramMetrics.map(hm => ({ label: hm, value: hm }));
+
     return (
-      <TypeaheadField
-        additionalPlugins={this.plugins}
-        cleanText={cleanText}
-        initialValue={this.props.initialQuery}
-        onTypeahead={this.onTypeahead}
-        onWillApplySuggestion={willApplySuggestion}
-        onValueChanged={this.onChangeQuery}
-        placeholder="Enter a PromQL query"
-      />
+      <div className="prom-query-field">
+        <div className="prom-query-field-tools">
+          <Cascader options={histogramOptions} onChange={this.onChangeHistogram}>
+            <button className="btn navbar-button navbar-button--tight">Histograms</button>
+          </Cascader>
+        </div>
+        <div className="slate-query-field-wrapper">
+          <TypeaheadField
+            additionalPlugins={this.plugins}
+            cleanText={cleanText}
+            initialValue={this.props.initialQuery}
+            onTypeahead={this.onTypeahead}
+            onWillApplySuggestion={willApplySuggestion}
+            onValueChanged={this.onChangeQuery}
+            placeholder="Enter a PromQL query"
+          />
+        </div>
+      </div>
     );
   }
 }
