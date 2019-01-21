@@ -1,5 +1,5 @@
 // Based on work https://github.com/mohsen1/json-formatter-js
-// Licence MIT, Copyright (c) 2015 Mohsen Azimi
+// License MIT, Copyright (c) 2015 Mohsen Azimi
 
 import { isObject, getObjectName, getType, getValuePreview, cssClass, createElement } from './helpers';
 
@@ -14,10 +14,10 @@ const MAX_ANIMATED_TOGGLE_ITEMS = 10;
 
 const requestAnimationFrame =
   window.requestAnimationFrame ||
-  function(cb: () => void) {
+  ((cb: () => void) => {
     cb();
     return 0;
-  };
+  });
 
 export interface JsonExplorerConfig {
   animateOpen?: boolean;
@@ -279,7 +279,7 @@ export class JsonExplorer {
       const objectWrapperSpan = createElement('span');
 
       // get constructor name and append it to wrapper span
-      var constructorName = createElement('span', 'constructor-name', this.constructorName);
+      const constructorName = createElement('span', 'constructor-name', this.constructorName);
       objectWrapperSpan.appendChild(constructorName);
 
       // if it's an array append the array specific elements like brackets and length

@@ -6,6 +6,8 @@ import (
 	"database/sql"
 	"fmt"
 	"math"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -41,6 +43,8 @@ var engineCache = engineCacheType{
 	cache:    make(map[int64]*xorm.Engine),
 	versions: make(map[int64]int),
 }
+
+var sqlIntervalCalculator = NewIntervalCalculator(nil)
 
 var NewXormEngine = func(driverName string, connectionString string) (*xorm.Engine, error) {
 	return xorm.NewEngine(driverName, connectionString)
@@ -94,8 +98,12 @@ var NewSqlQueryEndpoint = func(config *SqlQueryEndpointConfiguration, rowTransfo
 		return nil, err
 	}
 
-	engine.SetMaxOpenConns(10)
-	engine.SetMaxIdleConns(10)
+	maxOpenConns := config.Datasource.JsonData.Get("maxOpenConns").MustInt(0)
+	engine.SetMaxOpenConns(maxOpenConns)
+	maxIdleConns := config.Datasource.JsonData.Get("maxIdleConns").MustInt(2)
+	engine.SetMaxIdleConns(maxIdleConns)
+	connMaxLifetime := config.Datasource.JsonData.Get("connMaxLifetime").MustInt(14400)
+	engine.SetConnMaxLifetime(time.Duration(connMaxLifetime) * time.Second)
 
 	engineCache.versions[config.Datasource.Id] = config.Datasource.Version
 	engineCache.cache[config.Datasource.Id] = engine
@@ -112,9 +120,7 @@ func (e *sqlQueryEndpoint) Query(ctx context.Context, dsInfo *models.DataSource,
 		Results: make(map[string]*QueryResult),
 	}
 
-	session := e.engine.NewSession()
-	defer session.Close()
-	db := session.DB()
+	var wg sync.WaitGroup
 
 	for _, query := range tsdbQuery.Queries {
 		rawSQL := query.Model.Get("rawSql").MustString()
@@ -125,7 +131,15 @@ func (e *sqlQueryEndpoint) Query(ctx context.Context, dsInfo *models.DataSource,
 		queryResult := &QueryResult{Meta: simplejson.New(), RefId: query.RefId}
 		result.Results[query.RefId] = queryResult
 
-		rawSQL, err := e.macroEngine.Interpolate(query, tsdbQuery.TimeRange, rawSQL)
+		// global substitutions
+		rawSQL, err := Interpolate(query, tsdbQuery.TimeRange, rawSQL)
+		if err != nil {
+			queryResult.Error = err
+			continue
+		}
+
+		// datasource specific substitutions
+		rawSQL, err = e.macroEngine.Interpolate(query, tsdbQuery.TimeRange, rawSQL)
 		if err != nil {
 			queryResult.Error = err
 			continue
@@ -133,33 +147,59 @@ func (e *sqlQueryEndpoint) Query(ctx context.Context, dsInfo *models.DataSource,
 
 		queryResult.Meta.Set("sql", rawSQL)
 
-		rows, err := db.Query(rawSQL)
-		if err != nil {
-			queryResult.Error = err
-			continue
-		}
+		wg.Add(1)
 
-		defer rows.Close()
+		go func(rawSQL string, query *Query, queryResult *QueryResult) {
+			defer wg.Done()
+			session := e.engine.NewSession()
+			defer session.Close()
+			db := session.DB()
 
-		format := query.Model.Get("format").MustString("time_series")
-
-		switch format {
-		case "time_series":
-			err := e.transformToTimeSeries(query, rows, queryResult, tsdbQuery)
+			rows, err := db.Query(rawSQL)
 			if err != nil {
 				queryResult.Error = err
-				continue
+				return
 			}
-		case "table":
-			err := e.transformToTable(query, rows, queryResult, tsdbQuery)
-			if err != nil {
-				queryResult.Error = err
-				continue
+
+			defer rows.Close()
+
+			format := query.Model.Get("format").MustString("time_series")
+
+			switch format {
+			case "time_series":
+				err := e.transformToTimeSeries(query, rows, queryResult, tsdbQuery)
+				if err != nil {
+					queryResult.Error = err
+					return
+				}
+			case "table":
+				err := e.transformToTable(query, rows, queryResult, tsdbQuery)
+				if err != nil {
+					queryResult.Error = err
+					return
+				}
 			}
-		}
+		}(rawSQL, query, queryResult)
 	}
+	wg.Wait()
 
 	return result, nil
+}
+
+// global macros/substitutions for all sql datasources
+var Interpolate = func(query *Query, timeRange *TimeRange, sql string) (string, error) {
+	minInterval, err := GetIntervalFrom(query.DataSource, query.Model, time.Second*60)
+	if err != nil {
+		return sql, nil
+	}
+	interval := sqlIntervalCalculator.Calculate(timeRange, minInterval)
+
+	sql = strings.Replace(sql, "$__interval_ms", strconv.FormatInt(interval.Milliseconds(), 10), -1)
+	sql = strings.Replace(sql, "$__interval", interval.Text, -1)
+	sql = strings.Replace(sql, "$__unixEpochFrom()", fmt.Sprintf("%d", timeRange.GetFromAsSecondsEpoch()), -1)
+	sql = strings.Replace(sql, "$__unixEpochTo()", fmt.Sprintf("%d", timeRange.GetToAsSecondsEpoch()), -1)
+
+	return sql, nil
 }
 
 func (e *sqlQueryEndpoint) transformToTable(query *Query, rows *core.Rows, result *QueryResult, tsdbQuery *TsdbQuery) error {
@@ -274,9 +314,15 @@ func (e *sqlQueryEndpoint) transformToTimeSeries(query *Query, rows *core.Rows, 
 	fillMissing := query.Model.Get("fill").MustBool(false)
 	var fillInterval float64
 	fillValue := null.Float{}
+	fillPrevious := false
+
 	if fillMissing {
 		fillInterval = query.Model.Get("fillInterval").MustFloat64() * 1000
-		if !query.Model.Get("fillNull").MustBool(false) {
+		switch query.Model.Get("fillMode").MustString() {
+		case "null":
+		case "previous":
+			fillPrevious = true
+		case "value":
 			fillValue.Float64 = query.Model.Get("fillValue").MustFloat64()
 			fillValue.Valid = true
 		}
@@ -352,6 +398,14 @@ func (e *sqlQueryEndpoint) transformToTimeSeries(query *Query, rows *core.Rows, 
 					intervalStart = series.Points[len(series.Points)-1][1].Float64 + fillInterval
 				}
 
+				if fillPrevious {
+					if len(series.Points) > 0 {
+						fillValue = series.Points[len(series.Points)-1][0]
+					} else {
+						fillValue.Valid = false
+					}
+				}
+
 				// align interval start
 				intervalStart = math.Floor(intervalStart/fillInterval) * fillInterval
 
@@ -376,6 +430,14 @@ func (e *sqlQueryEndpoint) transformToTimeSeries(query *Query, rows *core.Rows, 
 			// fill in values from last fetched value till interval end
 			intervalStart := series.Points[len(series.Points)-1][1].Float64
 			intervalEnd := float64(tsdbQuery.TimeRange.MustGetTo().UnixNano() / 1e6)
+
+			if fillPrevious {
+				if len(series.Points) > 0 {
+					fillValue = series.Points[len(series.Points)-1][0]
+				} else {
+					fillValue.Valid = false
+				}
+			}
 
 			// align interval start
 			intervalStart = math.Floor(intervalStart/fillInterval) * fillInterval
@@ -545,4 +607,47 @@ func ConvertSqlValueColumnToFloat(columnName string, columnValue interface{}) (n
 	}
 
 	return value, nil
+}
+
+func SetupFillmode(query *Query, interval time.Duration, fillmode string) error {
+	query.Model.Set("fill", true)
+	query.Model.Set("fillInterval", interval.Seconds())
+	switch fillmode {
+	case "NULL":
+		query.Model.Set("fillMode", "null")
+	case "previous":
+		query.Model.Set("fillMode", "previous")
+	default:
+		query.Model.Set("fillMode", "value")
+		floatVal, err := strconv.ParseFloat(fillmode, 64)
+		if err != nil {
+			return fmt.Errorf("error parsing fill value %v", fillmode)
+		}
+		query.Model.Set("fillValue", floatVal)
+	}
+
+	return nil
+}
+
+type SqlMacroEngineBase struct{}
+
+func NewSqlMacroEngineBase() *SqlMacroEngineBase {
+	return &SqlMacroEngineBase{}
+}
+
+func (m *SqlMacroEngineBase) ReplaceAllStringSubmatchFunc(re *regexp.Regexp, str string, repl func([]string) string) string {
+	result := ""
+	lastIndex := 0
+
+	for _, v := range re.FindAllSubmatchIndex([]byte(str), -1) {
+		groups := []string{}
+		for i := 0; i < len(v); i += 2 {
+			groups = append(groups, str[v[i]:v[i+1]])
+		}
+
+		result += str[lastIndex:v[0]] + repl(groups)
+		lastIndex = v[1]
+	}
+
+	return result + str[lastIndex:]
 }

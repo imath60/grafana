@@ -2,12 +2,15 @@ import config from 'app/core/config';
 import _ from 'lodash';
 import coreModule from 'app/core/core_module';
 import store from 'app/core/store';
+import { ThemeNames, ThemeName } from '@grafana/ui';
 
 export class User {
   isGrafanaAdmin: any;
   isSignedIn: any;
   orgRole: any;
   orgId: number;
+  orgName: string;
+  orgCount: number;
   timezone: string;
   helpFlags1: number;
   lightTheme: boolean;
@@ -57,11 +60,15 @@ export class ContextSrv {
     this.sidemenu = !this.sidemenu;
     store.set('grafana.sidemenu', this.sidemenu);
   }
+
+  getTheme(): ThemeName {
+    return this.user.lightTheme ? ThemeNames.Light : ThemeNames.Dark;
+  }
 }
 
-var contextSrv = new ContextSrv();
+const contextSrv = new ContextSrv();
 export { contextSrv };
 
-coreModule.factory('contextSrv', function() {
+coreModule.factory('contextSrv', () => {
   return contextSrv;
 });

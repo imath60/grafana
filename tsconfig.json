@@ -3,10 +3,7 @@
     "moduleResolution": "node",
     "outDir": "public/dist",
     "target": "es5",
-    "lib": [
-      "es6",
-      "dom"
-    ],
+    "lib": ["es6", "dom"],
     "rootDir": "public/",
     "jsx": "react",
     "module": "esnext",
@@ -14,30 +11,26 @@
     "allowSyntheticDefaultImports": true,
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
-    "importHelpers": true, // importing helper functions from tslib
-    "noEmitHelpers": true, // disable emitting inline helper functions
-    "removeComments": false, // comments are needed by angular injections
+    "importHelpers": true,
+    "noEmitHelpers": true,
+    "removeComments": false,
     "inlineSourceMap": false,
     "sourceMap": true,
     "noEmitOnError": false,
     "emitDecoratorMetadata": false,
     "experimentalDecorators": true,
     "noImplicitReturns": true,
-    "noImplicitThis": false,
+    "noImplicitThis": true,
     "noImplicitUseStrict": false,
     "noImplicitAny": false,
     "noUnusedLocals": true,
     "baseUrl": "public",
     "pretty": true,
+    "typeRoots": ["node_modules/@types", "types"],
     "paths": {
-      "app": [
-        "app"
-      ]
+      "app": ["app"],
+      "sass": ["sass"]
     }
   },
-  "include": [
-    "public/app/**/*.ts",
-    "public/app/**/*.tsx",
-    "public/test/**/*.ts"
-  ]
+  "include": ["public/app/**/*.ts", "public/app/**/*.tsx", "public/test/**/*.ts"]
 }
